@@ -1,0 +1,5 @@
+{
+  "name": "AI 角色聊天模擬器",
+  "description": "設定兩位 AI 角色的個性，並觀看他們進行動態對話。您可以暫停聊天並注入系統事件來影響他們的對話。",
+  "requestFramePermissions": []
+}
