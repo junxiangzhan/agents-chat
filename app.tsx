@@ -1,6 +1,6 @@
 
 import React, { useState, useCallback, useEffect } from 'react';
-import { CharacterProfile } from './types';
+import { CharacterProfile, ChatMessage } from './types';
 import CharacterSetup from './pages/character-setup';
 import ConversationView from './pages/conversation-view';
 import ThemeSwitcher from './components/theme-switcher';
@@ -13,6 +13,7 @@ const App: React.FC = () => {
   const [characters, setCharacters] = useState<[CharacterProfile, CharacterProfile] | null>(null);
   const [worldview, setWorldview] = useState<string>('');
   const [model, setModel] = useState<string>('gemini-2.5-flash');
+  const [conversationHistory, setConversationHistory] = useState<ChatMessage[] | undefined>(undefined);
   const [theme, setTheme] = useState<Theme>(() => {
     const savedTheme = localStorage.getItem('app-theme') as Theme;
     return savedTheme || 'system';
@@ -46,16 +47,18 @@ const App: React.FC = () => {
     });
   };
 
-  const handleSimulationStart = useCallback((charA: CharacterProfile, charB: CharacterProfile, world: string, modelName: string) => {
+  const handleSimulationStart = useCallback((charA: CharacterProfile, charB: CharacterProfile, world: string, modelName: string, initialConversation?: ChatMessage[]) => {
     setCharacters([charA, charB]);
     setWorldview(world);
     setModel(modelName);
+    setConversationHistory(initialConversation);
     setView('conversation');
   }, []);
 
   const handleBackToSetup = useCallback(() => {
     setCharacters(null);
     setWorldview('');
+    setConversationHistory(undefined);
     setView('setup');
   }, []);
 
@@ -77,6 +80,7 @@ const App: React.FC = () => {
             worldview={worldview}
             model={model}
             onBack={handleBackToSetup} 
+            initialConversation={conversationHistory}
           />
         )}
       </main>

@@ -3,9 +3,10 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import type { Chat } from '@google/genai';
 import { getAiClient } from '../services/gemini-service';
 import type { CharacterProfile, ChatMessage } from '../types';
-import { PlayIcon, PauseIcon, SendIcon, BackIcon, BotIcon } from '../components/icons';
+import { PlayIcon, PauseIcon, SendIcon, BackIcon, BotIcon, BookOpenIcon, DownloadIcon } from '../components/icons';
 import MessageEditor from '../components/message-editor';
 import ChatBubble from '../components/chat-bubble';
+import SimulationSettingsModal from '../components/simulation-settings-modal';
 
 interface ConversationViewProps {
   characterA: CharacterProfile;
@@ -13,16 +14,18 @@ interface ConversationViewProps {
   worldview: string;
   model: string;
   onBack: () => void;
+  initialConversation?: ChatMessage[];
 }
 
-const ConversationView: React.FC<ConversationViewProps> = ({ characterA, characterB, worldview, model, onBack }) => {
-  const [conversation, setConversation] = useState<ChatMessage[]>([{ sender: 'System', text: '對話開始。' }]);
+const ConversationView: React.FC<ConversationViewProps> = ({ characterA, characterB, worldview, model, onBack, initialConversation }) => {
+  const [conversation, setConversation] = useState<ChatMessage[]>(initialConversation || [{ sender: 'System', text: '對話開始。' }]);
   const [isConversing, setIsConversing] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [currentTurn, setCurrentTurn] = useState<'A' | 'B'>('A');
   const [systemEvent, setSystemEvent] = useState('');
   const [apiKeyError, setApiKeyError] = useState<string | null>(null);
   const [editingMessage, setEditingMessage] = useState<{ index: number } | null>(null);
+  const [isSettingsVisible, setIsSettingsVisible] = useState(false);
 
   const chatA = useRef<Chat | null>(null);
   const chatB = useRef<Chat | null>(null);
@@ -156,6 +159,31 @@ const ConversationView: React.FC<ConversationViewProps> = ({ characterA, charact
     });
   };
 
+  const handleDownload = () => {
+    try {
+        const dataToSave = {
+            worldview,
+            charA: characterA,
+            charB: characterB,
+            model,
+            conversation
+        };
+        const jsonString = JSON.stringify(dataToSave, null, 2);
+        const blob = new Blob([jsonString], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        const timestamp = new Date().toISOString().replace(/:/g, '-').slice(0, 19);
+        link.download = `ai-chat-${characterA.name}-${characterB.name}-${timestamp}.json`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+    } catch (e) {
+        console.error("Failed to download conversation", e);
+    }
+  };
+
   const getStatusText = () => {
     if(isConversing) return '進行中';
     if(editingMessage) return '編輯中';
@@ -168,83 +196,110 @@ const ConversationView: React.FC<ConversationViewProps> = ({ characterA, charact
   }
 
   return (
-    <div className="conversation-container">
-      <header className="conversation-header">
-        <button onClick={onBack} className="back-button"><BackIcon /> 返回設定</button>
-        <div className="header-title">
-          <h2>{characterA.name} & {characterB.name}</h2>
-          <div className="header-subtitle">
-            <p className={getStatusClass()}>{getStatusText()}</p>
-            <span>&bull;</span>
-            <p className="model-name-display">{model}</p>
+    <>
+      <div className="conversation-container">
+        <header className="conversation-header">
+          <button onClick={onBack} className="back-button"><BackIcon /> 返回設定</button>
+          <div className="header-title">
+            <h2>{characterA.name} & {characterB.name}</h2>
+            <div className="header-subtitle">
+              <p className={getStatusClass()}>{getStatusText()}</p>
+              <span>&bull;</span>
+              <p className="model-name-display">{model}</p>
+            </div>
           </div>
+          <div className="header-actions">
+            <button
+                onClick={handleDownload}
+                className="settings-button"
+                aria-label="下載對話"
+                title="下載對話"
+            >
+                <DownloadIcon />
+            </button>
+            <button 
+              onClick={() => setIsSettingsVisible(true)} 
+              className="settings-button" 
+              aria-label="查看設定"
+              title="查看設定"
+            >
+              <BookOpenIcon />
+            </button>
+            <button onClick={handleToggleConversation} disabled={!!apiKeyError || !!editingMessage} className="play-pause-button">
+              {isConversing ? <PauseIcon /> : <PlayIcon />}
+            </button>
+          </div>
+        </header>
+
+        <div className="conversation-log">
+          {apiKeyError && <div className="api-error">{apiKeyError}</div>}
+          {conversation.map((msg, index) => (
+              editingMessage?.index === index ? (
+                  <MessageEditor
+                      key={`${index}-editor`}
+                      msg={msg}
+                      onSave={(newText) => handleSaveEdit(index, newText)}
+                      onCancel={handleCancelEdit}
+                  />
+              ) : (
+                  <ChatBubble 
+                      key={index} 
+                      msg={msg} 
+                      index={index}
+                      characterA={characterA}
+                      isConversing={isConversing}
+                      onStartEdit={handleStartEdit}
+                      onDeleteMessage={handleDeleteMessage}
+                  />
+              )
+          ))}
+          {isLoading && (
+              <div className="loading-indicator">
+                  <div className="loading-bubble">
+                    <BotIcon />
+                    <span>輸入中...</span>
+                  </div>
+              </div>
+          )}
+          <div ref={conversationEndRef} />
         </div>
-        <button onClick={handleToggleConversation} disabled={!!apiKeyError || !!editingMessage} className="play-pause-button">
-          {isConversing ? <PauseIcon /> : <PlayIcon />}
-        </button>
-      </header>
 
-      <div className="conversation-log">
-        {apiKeyError && <div className="api-error">{apiKeyError}</div>}
-        {conversation.map((msg, index) => (
-            editingMessage?.index === index ? (
-                <MessageEditor
-                    key={`${index}-editor`}
-                    msg={msg}
-                    onSave={(newText) => handleSaveEdit(index, newText)}
-                    onCancel={handleCancelEdit}
+        {!isConversing && !apiKeyError && !editingMessage && (
+          <footer className="conversation-footer">
+            <div className="system-event-input">
+              <p>對話已暫停。你可以引入一個新事件。</p>
+              <div className="input-group">
+                <input
+                  type="text"
+                  value={systemEvent}
+                  onChange={(e) => setSystemEvent(e.target.value)}
+                  placeholder="例如：一個奇怪的警報開始響起。"
+                  onKeyDown={(e) => e.key === 'Enter' && handleSendSystemEvent()}
                 />
-            ) : (
-                <ChatBubble 
-                    key={index} 
-                    msg={msg} 
-                    index={index}
-                    characterA={characterA}
-                    isConversing={isConversing}
-                    onStartEdit={handleStartEdit}
-                    onDeleteMessage={handleDeleteMessage}
-                />
-            )
-        ))}
-        {isLoading && (
-            <div className="loading-indicator">
-                <div className="loading-bubble">
-                   <BotIcon />
-                   <span>輸入中...</span>
-                </div>
+                <button onClick={handleSendSystemEvent} className="send-button">
+                  <SendIcon />
+                </button>
+              </div>
             </div>
+            <div className="manual-edit-actions">
+              <p>或手動編輯對話</p>
+              <div className="button-group">
+                  <button onClick={() => handleAddMessage(characterA.name)} className="button-add-a">新增 {characterA.name} 的訊息</button>
+                  <button onClick={() => handleAddMessage(characterB.name)} className="button-add-b">新增 {characterB.name} 的訊息</button>
+                  <button onClick={() => handleAddMessage('System')} className="button-add-system">新增系統事件</button>
+              </div>
+            </div>
+          </footer>
         )}
-        <div ref={conversationEndRef} />
       </div>
-
-      {!isConversing && !apiKeyError && !editingMessage && (
-        <footer className="conversation-footer">
-          <div className="system-event-input">
-            <p>對話已暫停。你可以引入一個新事件。</p>
-            <div className="input-group">
-              <input
-                type="text"
-                value={systemEvent}
-                onChange={(e) => setSystemEvent(e.target.value)}
-                placeholder="例如：一個奇怪的警報開始響起。"
-                onKeyDown={(e) => e.key === 'Enter' && handleSendSystemEvent()}
-              />
-              <button onClick={handleSendSystemEvent} className="send-button">
-                <SendIcon />
-              </button>
-            </div>
-          </div>
-          <div className="manual-edit-actions">
-             <p>或手動編輯對話</p>
-             <div className="button-group">
-                <button onClick={() => handleAddMessage(characterA.name)} className="button-add-a">新增 {characterA.name} 的訊息</button>
-                <button onClick={() => handleAddMessage(characterB.name)} className="button-add-b">新增 {characterB.name} 的訊息</button>
-                <button onClick={() => handleAddMessage('System')} className="button-add-system">新增系統事件</button>
-             </div>
-          </div>
-        </footer>
-      )}
-    </div>
+      <SimulationSettingsModal
+          isOpen={isSettingsVisible}
+          onClose={() => setIsSettingsVisible(false)}
+          characterA={characterA}
+          characterB={characterB}
+          worldview={worldview}
+      />
+    </>
   );
 };
 

@@ -1,10 +1,11 @@
+
 import React, { useState, useEffect, useRef } from 'react';
-import type { CharacterProfile } from '../types';
+import type { CharacterProfile, ChatMessage, SimulationData } from '../types';
 import { ArrowRightIcon, DownloadIcon, UploadIcon } from '../components/icons';
 import CharacterInput from '../components/character-input';
 
 interface CharacterSetupProps {
-  onStart: (characterA: CharacterProfile, characterB: CharacterProfile, worldview: string, model: string) => void;
+  onStart: (characterA: CharacterProfile, characterB: CharacterProfile, worldview: string, model: string, conversation?: ChatMessage[]) => void;
 }
 
 const LOCAL_STORAGE_KEY = 'ai-character-chat-profiles-with-worldview-v2';
@@ -18,8 +19,19 @@ const CharacterSetup: React.FC<CharacterSetupProps> = ({ onStart }) => {
   const [model, setModel] = useState<string>('gemini-2.5-flash');
   const [selectedModelOption, setSelectedModelOption] = useState<string>('gemini-2.5-flash');
   const [error, setError] = useState<string>('');
+  const [partialUploadData, setPartialUploadData] = useState<Partial<SimulationData> | null>(null);
+  const [uploadWithConversationData, setUploadWithConversationData] = useState<SimulationData | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const updateModelStates = (newModelValue: string) => {
+    setModel(newModelValue);
+    if (PREDEFINED_MODELS.includes(newModelValue)) {
+        setSelectedModelOption(newModelValue);
+    } else {
+        setSelectedModelOption(CUSTOM_MODEL_VALUE);
+    }
+  };
+  
   useEffect(() => {
     try {
       const savedData = localStorage.getItem(LOCAL_STORAGE_KEY);
@@ -32,12 +44,7 @@ const CharacterSetup: React.FC<CharacterSetupProps> = ({ onStart }) => {
             setWorldview(savedWorldview);
           }
           if (typeof savedModel === 'string') {
-            setModel(savedModel);
-            if (PREDEFINED_MODELS.includes(savedModel)) {
-              setSelectedModelOption(savedModel);
-            } else {
-              setSelectedModelOption(CUSTOM_MODEL_VALUE);
-            }
+            updateModelStates(savedModel);
           }
         }
       }
@@ -105,29 +112,33 @@ const CharacterSetup: React.FC<CharacterSetupProps> = ({ onStart }) => {
     reader.onload = (e) => {
       try {
         const text = e.target?.result;
-        if (typeof text !== 'string') {
-          throw new Error("檔案讀取錯誤。");
+        if (typeof text !== 'string') throw new Error("檔案讀取錯誤。");
+        
+        const data: Partial<SimulationData> = JSON.parse(text);
+        
+        const isCompleteChar = (char: any): char is CharacterProfile => char && char.name && char.identity && char.personality;
+
+        if (Array.isArray(data.conversation) && data.conversation.length > 0) {
+            if (data.charA && isCompleteChar(data.charA) && data.charB && isCompleteChar(data.charB) && typeof data.worldview === 'string' && typeof data.model === 'string') {
+                setUploadWithConversationData(data as SimulationData);
+                return;
+            }
         }
-        const data = JSON.parse(text);
-        if (
-          data.charA && data.charA.name && data.charA.identity && data.charA.personality &&
-          data.charB && data.charB.name && data.charB.identity && data.charB.personality &&
-          typeof data.worldview === 'string' &&
-          (typeof data.model === 'string' || typeof data.model === 'undefined') // model is optional for backwards compatibility
-        ) {
+        
+        const hasAnyValidKey = data.charA || data.charB || data.worldview !== undefined || data.model !== undefined;
+
+        if (data.charA && isCompleteChar(data.charA) && data.charB && isCompleteChar(data.charB) && typeof data.worldview === 'string' && typeof data.model === 'string') {
           setCharacterA(data.charA);
           setCharacterB(data.charB);
           setWorldview(data.worldview);
-          const uploadedModel = data.model || 'gemini-2.5-flash';
-          setModel(uploadedModel);
-          if (PREDEFINED_MODELS.includes(uploadedModel)) {
-            setSelectedModelOption(uploadedModel);
-          } else {
-            setSelectedModelOption(CUSTOM_MODEL_VALUE);
-          }
+          updateModelStates(data.model);
+          setError('');
+          setPartialUploadData(null);
+        } else if (hasAnyValidKey) {
+          setPartialUploadData(data);
           setError('');
         } else {
-          setError("無效的檔案格式。請確認檔案包含完整的角色與世界觀設定。");
+          setError("無效的檔案格式。請確認檔案包含角色與世界觀設定。");
         }
       } catch (err) {
         setError("讀取檔案失敗。請確認檔案為正確的 JSON 格式。");
@@ -141,93 +152,169 @@ const CharacterSetup: React.FC<CharacterSetupProps> = ({ onStart }) => {
     event.target.value = '';
   };
 
+  const handleCancelPartialUpload = () => {
+    setPartialUploadData(null);
+  };
+
+  const handleMergeUpload = () => {
+    if (!partialUploadData) return;
+    const { charA, charB, worldview: newWorldview, model: newModel } = partialUploadData;
+
+    if (charA) setCharacterA(prev => ({ ...prev, ...charA }));
+    if (charB) setCharacterB(prev => ({ ...prev, ...charB }));
+    if (newWorldview !== undefined) setWorldview(newWorldview);
+    if (newModel !== undefined) updateModelStates(newModel);
+    
+    setPartialUploadData(null);
+  };
+
+  const handleClearAndApplyUpload = () => {
+    if (!partialUploadData) return;
+    const { charA, charB, worldview: newWorldview, model: newModel } = partialUploadData;
+    const blankProfile: CharacterProfile = { name: '', identity: '', personality: '' };
+
+    setCharacterA({ ...blankProfile, ...charA });
+    setCharacterB({ ...blankProfile, ...charB });
+    setWorldview(newWorldview || '');
+    updateModelStates(newModel || 'gemini-2.5-flash');
+
+    setPartialUploadData(null);
+  };
+
+  const handleUploadConversation = () => {
+    if (!uploadWithConversationData) return;
+    const { charA, charB, worldview, model, conversation } = uploadWithConversationData;
+    onStart(charA, charB, worldview, model, conversation);
+    setUploadWithConversationData(null);
+  };
+
+  const handleUploadSettingsOnly = () => {
+    if (!uploadWithConversationData) return;
+    const { charA, charB, worldview, model } = uploadWithConversationData;
+    setCharacterA(charA);
+    setCharacterB(charB);
+    setWorldview(worldview);
+    updateModelStates(model);
+    setUploadWithConversationData(null);
+  };
+
   return (
-    <div className="setup-container">
-      <h2>設定世界觀與角色</h2>
-      
-      <div className="worldview-card">
-        <h3>世界觀 / 故事背景</h3>
-        <textarea
-            name="worldview"
-            value={worldview}
-            onChange={(e) => setWorldview(e.target.value)}
-            rows={3}
-            placeholder="例如：在一個賽博龐克城市，霓虹燈在永不停歇的雨中閃爍。"
-        />
-      </div>
+    <>
+      <div className="setup-container">
+        <h2>設定世界觀與角色</h2>
+        
+        <div className="worldview-card">
+          <h3>世界觀 / 故事背景</h3>
+          <textarea
+              name="worldview"
+              value={worldview}
+              onChange={(e) => setWorldview(e.target.value)}
+              rows={3}
+              placeholder="例如：在一個賽博龐克城市，霓虹燈在永不停歇的雨中閃爍。"
+          />
+        </div>
 
-      <div className="characters-grid">
-        <CharacterInput character={characterA} setCharacter={setCharacterA} title="角色一" />
-        <CharacterInput character={characterB} setCharacter={setCharacterB} title="角色二" />
-      </div>
+        <div className="characters-grid">
+          <CharacterInput character={characterA} setCharacter={setCharacterA} title="角色一" />
+          <CharacterInput character={characterB} setCharacter={setCharacterB} title="角色二" />
+        </div>
 
-      <hr />
+        <hr />
 
-      <div className="settings-card">
-        <h3>模擬設定</h3>
-        <div className="model-selection-group">
-            <label htmlFor="model-name">語言模型</label>
-            <select
-                id="model-name"
-                name="model-select"
-                value={selectedModelOption}
-                onChange={handleModelSelectChange}
-            >
-                {PREDEFINED_MODELS.map(m => (
-                    <option key={m} value={m}>{m}</option>
-                ))}
-                <option value={CUSTOM_MODEL_VALUE}>自訂模型...</option>
-            </select>
-            
-            {selectedModelOption === CUSTOM_MODEL_VALUE && (
-                <input
-                    type="text"
-                    id="custom-model-name"
-                    name="model"
-                    value={model}
-                    onChange={(e) => setModel(e.target.value)}
-                    placeholder="輸入自訂模型名稱"
-                />
-            )}
-            <p className="field-description">選擇或輸入您想用於模擬的 Google AI 模型名稱。</p>
+        <div className="settings-card">
+          <h3>模擬設定</h3>
+          <div className="model-selection-group">
+              <label htmlFor="model-name">語言模型</label>
+              <select
+                  id="model-name"
+                  name="model-select"
+                  value={selectedModelOption}
+                  onChange={handleModelSelectChange}
+              >
+                  {PREDEFINED_MODELS.map(m => (
+                      <option key={m} value={m}>{m}</option>
+                  ))}
+                  <option value={CUSTOM_MODEL_VALUE}>自訂模型...</option>
+              </select>
+              
+              {selectedModelOption === CUSTOM_MODEL_VALUE && (
+                  <input
+                      type="text"
+                      id="custom-model-name"
+                      name="model"
+                      value={model}
+                      onChange={(e) => setModel(e.target.value)}
+                      placeholder="輸入自訂模型名稱"
+                  />
+              )}
+              <p className="field-description">選擇或輸入您想用於模擬的 Google AI 模型名稱。</p>
+          </div>
+        </div>
+
+        {error && <p className="error-message">{error}</p>}
+        
+        <hr />
+        
+        <div className="file-actions">
+          <input 
+              type="file" 
+              ref={fileInputRef} 
+              onChange={handleFileUpload}
+              accept=".json"
+              hidden 
+          />
+          <button
+            onClick={handleUploadClick}
+            className="button-secondary"
+          >
+            <UploadIcon /> 上傳設定
+          </button>
+          <button
+            onClick={handleDownload}
+            className="button-secondary"
+          >
+            <DownloadIcon /> 下載設定
+          </button>
+        </div>
+
+        <div className="start-action">
+          <button
+            onClick={handleStart}
+            className="button-primary"
+          >
+            開始模擬 <ArrowRightIcon />
+          </button>
         </div>
       </div>
-
-      {error && <p className="error-message">{error}</p>}
       
-      <hr />
-      
-      <div className="file-actions">
-        <input 
-            type="file" 
-            ref={fileInputRef} 
-            onChange={handleFileUpload}
-            accept=".json"
-            hidden 
-        />
-        <button
-          onClick={handleUploadClick}
-          className="button-secondary"
-        >
-          <UploadIcon /> 上傳設定
-        </button>
-        <button
-          onClick={handleDownload}
-          className="button-secondary"
-        >
-          <DownloadIcon /> 下載設定
-        </button>
-      </div>
+      {partialUploadData && (
+        <div className="modal-overlay">
+            <div className="modal-content">
+                <h3>檔案內容不完整</h3>
+                <p>您上傳的設定檔缺少部分欄位。您希望如何處理？</p>
+                <div className="modal-actions">
+                    <button onClick={handleCancelPartialUpload} className="button-secondary">取消上傳</button>
+                    <button onClick={handleMergeUpload} className="button-secondary">保留已有欄位</button>
+                    <button onClick={handleClearAndApplyUpload} className="button-secondary">清空已有欄位</button>
+                </div>
+            </div>
+        </div>
+      )}
 
-      <div className="start-action">
-        <button
-          onClick={handleStart}
-          className="button-primary"
-        >
-          開始模擬 <ArrowRightIcon />
-        </button>
-      </div>
-    </div>
+      {uploadWithConversationData && (
+        <div className="modal-overlay">
+            <div className="modal-content">
+                <h3>偵測到對話記錄</h3>
+                <p>您上傳的檔案包含對話記錄。請選擇匯入方式：</p>
+                <div className="modal-actions">
+                    <button onClick={() => setUploadWithConversationData(null)} className="button-secondary">取消</button>
+                    <button onClick={handleUploadSettingsOnly} className="button-secondary">僅匯入設定</button>
+                    <button onClick={handleUploadConversation} className="button-primary">匯入設定與對話</button>
+                </div>
+            </div>
+        </div>
+      )}
+    </>
   );
 };
 
